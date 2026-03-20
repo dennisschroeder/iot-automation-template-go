@@ -1,8 +1,6 @@
 package mqtt
 
 import (
-	"encoding/json"
-	"fmt"
 	"log/slog"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -12,31 +10,26 @@ type Client struct {
 	client mqtt.Client
 }
 
-func NewClient(broker string, clientID string) (*Client, error) {
+type MessageHandler func(topic string, payload []byte)
+
+func NewClient(broker, clientID string) (*Client, error) {
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
 		SetClientID(clientID).
-		SetAutoReconnect(true).
-		SetCleanSession(false).
-		SetResumeSubs(true)
+		SetAutoReconnect(true)
 
 	client := mqtt.NewClient(opts)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		return nil, token.Error()
 	}
-
-	slog.Info("MQTT client initialized", "broker", broker, "client_id", clientID)
+	slog.Info("MQTT client connected", "broker", broker)
 	return &Client{client: client}, nil
 }
 
-func (c *Client) PublishDiscovery(component string, objectID string, config interface{}) error {
-	topic := fmt.Sprintf("homeassistant/%s/%s/config", component, objectID)
-	payload, err := json.Marshal(config)
-	if err != nil {
-		return err
-	}
-
-	token := c.client.Publish(topic, 0, true, payload)
+func (c *Client) Subscribe(topic string, handler MessageHandler) error {
+	token := c.client.Subscribe(topic, 1, func(client mqtt.Client, msg mqtt.Message) {
+		handler(msg.Topic(), msg.Payload())
+	})
 	token.Wait()
 	return token.Error()
 }

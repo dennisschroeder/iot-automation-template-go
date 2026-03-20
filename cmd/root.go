@@ -2,30 +2,32 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/dennisschroeder/iot-app-template-go/internal/mqtt"
-	"github.com/dennisschroeder/iot-app-template-go/internal/service"
-	"github.com/dennisschroeder/iot-app-template-go/internal/source"
+	"github.com/dennisschroeder/iot-automation-template-go/internal/mqtt"
+	"github.com/dennisschroeder/iot-automation-template-go/internal/nats"
+	"github.com/dennisschroeder/iot-automation-template-go/internal/service"
 )
 
 var (
 	RootCmd = &cobra.Command{
-		Use:   "iot-app-template-go",
-		Short: "A template for stateless IoT bridges in Go",
+		Use:   "iot-automation-template-go",
+		Short: "A template for event-driven IoT automations in Go",
 		Run:   runRoot,
 	}
 
 	rootArgs struct {
 		logLevel string
-		mqtt     mqtt.Config
-		source   source.Config
+		mqttHost string
+		mqttPort int
+		clientID string
+		natsURL  string
 		service  service.Config
 	}
 )
@@ -37,16 +39,12 @@ func init() {
 	f.StringVar(&rootArgs.logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 
 	// MQTT flags
-	f.StringVar(&rootArgs.mqtt.Host, "mqtt-host", "mosquitto.mqtt.svc.cluster.local", "MQTT broker host")
-	f.IntVar(&rootArgs.mqtt.Port, "mqtt-port", 1883, "MQTT broker port")
-	f.StringVar(&rootArgs.mqtt.ClientID, "mqtt-client-id", "iot-app-template", "MQTT Client ID")
+	f.StringVar(&rootArgs.mqttHost, "mqtt-host", "mosquitto.mqtt.svc.cluster.local", "MQTT broker host")
+	f.IntVar(&rootArgs.mqttPort, "mqtt-port", 1883, "MQTT broker port")
+	f.StringVar(&rootArgs.clientID, "mqtt-client-id", "iot-automation-template", "MQTT Client ID")
 
-	// Source API / Modbus flags
-	f.StringVar(&rootArgs.source.Address, "source-address", "192.168.1.100", "IP address of the source device")
-	f.IntVar(&rootArgs.source.Port, "source-port", 80, "Port of the source device")
-
-	// Service specific flags
-	f.DurationVar(&rootArgs.service.PollInterval, "poll-interval", 30*time.Second, "Interval to poll the source device")
+	// NATS flags
+	f.StringVar(&rootArgs.natsURL, "nats-url", "nats://nats.event-bus.svc.cluster.local:4222", "NATS server URL")
 }
 
 func runRoot(cmd *cobra.Command, args []string) {
@@ -58,38 +56,31 @@ func runRoot(cmd *cobra.Command, args []string) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
-	slog.Info("Starting iot-app-template-go...")
+	slog.Info("Starting iot-automation-template-go...")
 
 	// Context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 1. Prepare MQTT Client (Target)
-	mqttClient, err := mqtt.NewClient(rootArgs.mqtt, logger)
+	// 1. Prepare NATS Client
+	natsClient, err := nats.NewClient(rootArgs.natsURL)
+	if err != nil {
+		slog.Error("Failed to initialize NATS client", "error", err)
+		os.Exit(1)
+	}
+	defer natsClient.Close()
+
+	// 2. Prepare MQTT Client
+	mqttBroker := fmt.Sprintf("tcp://%s:%d", rootArgs.mqttHost, rootArgs.mqttPort)
+	mqttClient, err := mqtt.NewClient(mqttBroker, rootArgs.clientID)
 	if err != nil {
 		slog.Error("Failed to initialize MQTT client", "error", err)
 		os.Exit(1)
 	}
-	if err := mqttClient.Connect(ctx); err != nil {
-		slog.Error("Failed to connect to MQTT broker", "error", err)
-		os.Exit(1)
-	}
-	defer mqttClient.Disconnect()
+	defer mqttClient.Close()
 
-	// 2. Prepare Source Client (e.g., Modbus, REST)
-	srcClient, err := source.NewClient(rootArgs.source, logger)
-	if err != nil {
-		slog.Error("Failed to initialize source client", "error", err)
-		os.Exit(1)
-	}
-	if err := srcClient.Connect(ctx); err != nil {
-		slog.Error("Failed to connect to source device", "error", err)
-		os.Exit(1)
-	}
-	defer srcClient.Disconnect()
-
-	// 3. Prepare and run Main Service (Business Logic)
-	svc := service.New(rootArgs.service, logger, srcClient, mqttClient)
+	// 3. Prepare and run Main Service (Automation Logic)
+	svc := service.New(rootArgs.service, logger, natsClient, mqttClient)
 
 	// Listen for OS signals to trigger graceful shutdown
 	sigChan := make(chan os.Signal, 1)
