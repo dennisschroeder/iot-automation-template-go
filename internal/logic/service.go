@@ -37,6 +37,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 	// Subscribe to IoT events on NATS
 	_, err := s.nats.Subscribe("iot.events.>", func(msg *natsgo.Msg) {
+		slog.Debug("NATS message received", "subject", msg.Subject, "size", len(msg.Data))
 		var envelope iotv1.EventEnvelope
 		if err := proto.Unmarshal(msg.Data, &envelope); err != nil {
 			slog.Debug("Skipping non-envelope message or unmarshal error", "subject", msg.Subject)
@@ -45,8 +46,9 @@ func (s *Service) Run(ctx context.Context) error {
 
 		// Check if it's a PresenceEvent for our target PIR
 		if presence := envelope.GetPresence(); presence != nil {
+			slog.Debug("Processing presence event", "entity_id", presence.EntityId, "target", TargetPIR)
 			if presence.EntityId == TargetPIR {
-				slog.Info("Presence detected", "state", presence.State.String())
+				slog.Info("Presence match found", "state", presence.State.String())
 				s.handlePresence(presence)
 			}
 		}

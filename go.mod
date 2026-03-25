@@ -1,9 +1,9 @@
 module github.com/dennisschroeder/iot-automation-template-go
 
-go 1.26.1
+go 1.24.0
 
 require (
-	github.com/dennisschroeder/iot-schemas-proto v0.0.0
+	github.com/dennisschroeder/iot-schemas-proto v0.0.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/nats-io/nats.go v1.49.0
 	github.com/spf13/cobra v1.10.2
