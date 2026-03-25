@@ -41,6 +41,12 @@ func (c *Client) PublishDiscovery(component string, objectID string, config inte
 	return token.Error()
 }
 
+func (c *Client) Publish(topic string, payload interface{}) error {
+	token := c.client.Publish(topic, 0, false, payload)
+	token.Wait()
+	return token.Error()
+}
+
 func (c *Client) Close() {
 	c.client.Disconnect(250)
 }

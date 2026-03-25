@@ -3,9 +3,11 @@ module github.com/dennisschroeder/iot-automation-template-go
 go 1.26.1
 
 require (
+	github.com/dennisschroeder/iot-schemas-proto v0.0.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/nats-io/nats.go v1.49.0
 	github.com/spf13/cobra v1.10.2
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -20,3 +22,5 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 )
+
+replace github.com/dennisschroeder/iot-schemas-proto => ../iot-schemas-proto
