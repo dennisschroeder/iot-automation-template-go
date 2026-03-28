@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	iotv1 "github.com/dennisschroeder/iot-schemas-proto/gen/go/iot/v1"
+	"github.com/dennisschroeder/iot-schemas-proto/proto/v1/envelope"
 	"github.com/dennisschroeder/iot-automation-template-go/internal/transport/mqtt"
 	"github.com/dennisschroeder/iot-automation-template-go/internal/transport/nats"
 	natsgo "github.com/nats-io/nats.go"
@@ -34,8 +34,8 @@ func (s *Service) Run(ctx context.Context) error {
 	// Pattern: iot.v1.events.<source>.<area>.<device_id>
 	subject := "iot.v1.events.>"
 	_, err := s.nats.Subscribe(subject, func(msg *natsgo.Msg) {
-		var envelope iotv1.EventEnvelope
-		if err := proto.Unmarshal(msg.Data, &envelope); err != nil {
+		var env envelope.EventEnvelope
+		if err := proto.Unmarshal(msg.Data, &env); err != nil {
 			slog.Warn("Failed to unmarshal v1 envelope", "subject", msg.Subject, "error", err)
 			return
 		}
@@ -43,16 +43,17 @@ func (s *Service) Run(ctx context.Context) error {
 		// Log detailed information based on payload type
 		slog.Info("Event Received", 
 			"subject", msg.Subject,
-			"source", envelope.Source,
-			"id", envelope.Id,
+			"source", env.Source,
+			"id", env.Id,
 		)
 
-		if presence := envelope.GetPresence(); presence != nil {
-			slog.Info("├── Presence detected", 
-				"entity", presence.EntityId, 
-				"state", presence.State.String(),
+		if bs := env.GetBinarySensor(); bs != nil {
+			slog.Info("├── BinarySensor state updated", 
+				"entity", bs.EntityId, 
+				"state", bs.State.String(),
+				"class", bs.DeviceClass,
 			)
-		} else if light := envelope.GetLight(); light != nil {
+		} else if light := env.GetLight(); light != nil {
 			slog.Info("├── Light state updated", 
 				"entity", light.EntityId, 
 				"state", light.State.String(),
