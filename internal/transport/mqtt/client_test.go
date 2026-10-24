@@ -9,10 +9,13 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
-type fakeToken struct{ err error }
+type fakeToken struct {
+	err      error
+	timedOut bool
+}
 
-func (t *fakeToken) Wait() bool                     { return true }
-func (t *fakeToken) WaitTimeout(time.Duration) bool { return true }
+func (t *fakeToken) Wait() bool                     { return !t.timedOut }
+func (t *fakeToken) WaitTimeout(time.Duration) bool { return !t.timedOut }
 func (t *fakeToken) Done() <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
@@ -36,16 +39,20 @@ type fakeClient struct {
 	subscribed []string
 	callbacks  map[string]mqtt.MessageHandler
 	failTopics map[string]bool
+	slowTopics map[string]bool
 }
 
 func newFakeClient() *fakeClient {
-	return &fakeClient{callbacks: map[string]mqtt.MessageHandler{}, failTopics: map[string]bool{}}
+	return &fakeClient{callbacks: map[string]mqtt.MessageHandler{}, failTopics: map[string]bool{}, slowTopics: map[string]bool{}}
 }
 
 func (f *fakeClient) Subscribe(topic string, _ byte, cb mqtt.MessageHandler) mqtt.Token {
 	f.subscribed = append(f.subscribed, topic)
 	if f.failTopics[topic] {
 		return &fakeToken{err: errors.New("subscribe refused")}
+	}
+	if f.slowTopics[topic] {
+		return &fakeToken{timedOut: true}
 	}
 	f.callbacks[topic] = cb
 	return &fakeToken{}
@@ -114,5 +121,47 @@ func TestResubscribeContinuesAfterFailure(t *testing.T) {
 	}
 	if _, ok := f.callbacks["b/set"]; !ok {
 		t.Fatal("b/set not resubscribed after a/set failed")
+	}
+}
+
+func TestOptionsWireResubscribeOnConnect(t *testing.T) {
+	f := newFakeClient()
+	c := newTestClient(f)
+	opts := c.options("tcp://broker:1883", "test-client")
+
+	if opts.CleanSession || !opts.ResumeSubs || !opts.AutoReconnect {
+		t.Fatalf("unexpected session options: clean=%v resume=%v autoReconnect=%v",
+			opts.CleanSession, opts.ResumeSubs, opts.AutoReconnect)
+	}
+	if opts.OnConnect == nil {
+		t.Fatal("OnConnect handler not registered")
+	}
+
+	opts.OnConnect(f) // initial connect
+	if err := c.Subscribe("svc/switch/+/set", func(string, []byte) {}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	f.subscribed = nil
+	opts.OnConnect(f) // reconnect
+	if len(f.subscribed) != 1 || f.subscribed[0] != "svc/switch/+/set" {
+		t.Fatalf("OnConnect did not resubscribe, got %v", f.subscribed)
+	}
+}
+
+func TestSubscribeTimesOut(t *testing.T) {
+	f := newFakeClient()
+	c := newTestClient(f)
+	f.slowTopics["svc/switch/+/set"] = true
+
+	if err := c.Subscribe("svc/switch/+/set", func(string, []byte) {}); err == nil {
+		t.Fatal("expected error when SUBACK does not arrive in time")
+	}
+	// The topic stays registered so the next reconnect retries it.
+	f.slowTopics = map[string]bool{}
+	f.subscribed = nil
+	c.resubscribe(f) // initial connect
+	c.resubscribe(f)
+	if len(f.subscribed) != 1 {
+		t.Fatalf("expected retry on reconnect, got %v", f.subscribed)
 	}
 }

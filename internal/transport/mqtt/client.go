@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
@@ -19,7 +20,17 @@ type Client struct {
 
 func NewClient(broker string, clientID string) (*Client, error) {
 	c := &Client{subs: make(map[string]MessageHandler)}
-	opts := mqtt.NewClientOptions().
+	c.client = mqtt.NewClient(c.options(broker, clientID))
+	if token := c.client.Connect(); token.Wait() && token.Error() != nil {
+		return nil, token.Error()
+	}
+
+	slog.Info("MQTT client initialized", "broker", broker, "client_id", clientID)
+	return c, nil
+}
+
+func (c *Client) options(broker, clientID string) *mqtt.ClientOptions {
+	return mqtt.NewClientOptions().
 		AddBroker(broker).
 		SetClientID(clientID).
 		SetAutoReconnect(true).
@@ -29,17 +40,13 @@ func NewClient(broker string, clientID string) (*Client, error) {
 		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 			slog.Warn("MQTT connection lost", "error", err)
 		})
-
-	c.client = mqtt.NewClient(opts)
-	if token := c.client.Connect(); token.Wait() && token.Error() != nil {
-		return nil, token.Error()
-	}
-
-	slog.Info("MQTT client initialized", "broker", broker, "client_id", clientID)
-	return c, nil
 }
 
 type MessageHandler func(topic string, payload []byte)
+
+// subscribeTimeout bounds the wait for a SUBACK. If the connection drops
+// mid-subscribe, ResumeSubs delivers the SUBSCRIBE on the next connection.
+const subscribeTimeout = 10 * time.Second
 
 // resubscribe runs on every (re)connect. ResumeSubs only resends SUBSCRIBEs
 // that were never acknowledged, so once the broker has dropped the persistent
@@ -92,14 +99,20 @@ func (c *Client) Subscribe(topic string, handler MessageHandler) error {
 	c.mu.Lock()
 	c.subs[topic] = handler
 	c.mu.Unlock()
-	return subscribe(c.client, topic, handler)
+	if err := subscribe(c.client, topic, handler); err != nil {
+		slog.Error("MQTT subscribe failed", "topic", topic, "error", err)
+		return err
+	}
+	return nil
 }
 
 func subscribe(client mqtt.Client, topic string, handler MessageHandler) error {
 	token := client.Subscribe(topic, 0, func(_ mqtt.Client, msg mqtt.Message) {
 		handler(msg.Topic(), msg.Payload())
 	})
-	token.Wait()
+	if !token.WaitTimeout(subscribeTimeout) {
+		return fmt.Errorf("no SUBACK within %s", subscribeTimeout)
+	}
 	return token.Error()
 }
 
