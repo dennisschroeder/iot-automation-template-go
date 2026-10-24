@@ -13,7 +13,7 @@ type Client struct {
 }
 
 func NewClient(url string) (*Client, error) {
-	nc, err := nats.Connect(url)
+	nc, err := nats.Connect(url, connectOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
@@ -25,6 +25,21 @@ func NewClient(url string) (*Client, error) {
 
 	slog.Info("NATS JetStream client initialized", "url", url)
 	return &Client{nc: nc, js: js}, nil
+}
+
+// nats.go restores core subscriptions after a reconnect, but by default gives
+// up after 60 attempts (~2 min); the connection is then closed for good while
+// the process keeps running without receiving any events.
+func connectOptions() []nats.Option {
+	return []nats.Option{
+		nats.MaxReconnects(-1),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			slog.Warn("NATS disconnected", "error", err)
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			slog.Info("NATS reconnected", "url", nc.ConnectedUrl())
+		}),
+	}
 }
 
 func (c *Client) Subscribe(subject string, handler nats.MsgHandler) (*nats.Subscription, error) {
